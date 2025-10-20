@@ -5,8 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>中药识别 - 枸杞与菊花</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
-    <!-- 仅需加载TensorFlow.js核心库 -->
+    <link href="https://cdn.jsdelivr.net.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.14.0/dist/tf.min.js"></script>
 </head>
 <body class="bg-gray-50 min-h-screen">
@@ -156,32 +155,39 @@
             document.head.appendChild(script);
         }
         
-        // 加载模型（使用model.json和weights.bin）
+        // 加载模型（关键修改：解决跨域和路径问题）
         async function loadModel() {
             try {
                 statusIndicator.innerHTML = '<i class="fa fa-circle-o-notch fa-spin mr-1"></i><span>加载模型中...</span>';
                 
                 // 检查运行环境
                 if (window.location.protocol === 'file:') {
-                    throw new Error('请使用HTTP服务器运行（如localhost或GitHub Pages）');
+                    throw new Error('请使用GitHub Pages访问（https://wuage505.github.io/shibie/）');
                 }
                 
-                // 模型地址（替换为你的GitHub Raw地址，指向model.json）
-                // 注意：model.json会自动加载同目录下的weights.bin
-                const modelUrl = 'https://raw.githubusercontent.com/你的用户名/你的仓库名/main/model.json';
+                // 关键修复1：使用GitHub Pages相对路径（避免跨域）
+                // 你的仓库部署地址是：https://wuage505.github.io/shibie/
+                // 模型文件与index.html在同一目录，直接使用相对路径
+                const modelUrl = 'model.json';
                 
-                // 先检查模型是否可访问
-                const response = await fetch(modelUrl, { method: 'HEAD' });
+                // 关键修复2：添加缓存清除和跨域配置
+                const response = await fetch(modelUrl + '?t=' + new Date().getTime(), {
+                    mode: 'cors',
+                    cache: 'no-store'
+                });
+                
                 if (!response.ok) {
-                    throw new Error(`模型文件不存在，请检查地址是否正确 (${response.status})`);
+                    throw new Error(`模型文件加载失败（${response.status}），可能文件未上传或路径错误`);
                 }
                 
-                // 加载TensorFlow.js模型（核心修改：使用loadLayersModel）
-                model = await tf.loadLayersModel(modelUrl);
+                // 关键修复3：使用正确的模型加载方式
+                model = await tf.loadLayersModel(tf.io.browserHTTPRequest(modelUrl, {
+                    requestInit: { mode: 'cors' }
+                }));
                 
                 // 验证模型
                 if (!model || typeof model.predict !== 'function') {
-                    throw new Error('模型加载不完整');
+                    throw new Error('模型结构不完整');
                 }
                 
                 statusIndicator.innerHTML = '<i class="fa fa-check text-green-500 mr-1"></i><span>模型加载完成</span>';
@@ -189,7 +195,7 @@
                 analyzeBtn.innerHTML = '<i class="fa fa-search mr-1"></i> 开始识别';
                 
             } catch (error) {
-                console.error('模型加载失败:', error);
+                console.error('模型加载失败详情:', error);
                 statusIndicator.innerHTML = `
                     <i class="fa fa-exclamation-triangle text-red-500 mr-1"></i>
                     <span class="text-red-500 text-xs">${error.message}</span>
@@ -235,20 +241,19 @@
             img.onload = async function() {
                 const canvas = document.createElement('canvas');
                 const ctx = canvas.getContext('2d');
-                // 使用模型要求的输入尺寸（Teachable Machine默认224x224）
                 canvas.width = 224;
                 canvas.height = 224;
                 ctx.drawImage(img, 0, 0, 224, 224);
                 
                 try {
-                    // 预处理图像（与训练时的预处理一致）
+                    // 预处理图像
                     let tensor = tf.browser.fromPixels(canvas)
-                        .resizeBilinear([224, 224])  // 确保尺寸正确
+                        .resizeBilinear([224, 224])
                         .toFloat()
-                        .div(255.0)  // 归一化到0-1范围
-                        .expandDims(0);  // 添加批次维度
+                        .div(255.0)
+                        .expandDims(0);
                     
-                    // 模型预测（使用TensorFlow.js的predict方法）
+                    // 模型预测
                     const predictions = model.predict(tensor);
                     const scores = await predictions.data();
                     
@@ -269,15 +274,12 @@
                         </div>
                     `;
                     
-                    // 显示概率
                     wolfberryProb.textContent = `${枸杞概率}%`;
                     chrysanthemumProb.textContent = `${菊花概率}%`;
                     
-                    // 显示药材信息
                     herbName.textContent = 识别结果 + ' 信息';
                     herbDescription.textContent = herbData[识别结果].description;
                     
-                    // 显示结果区域
                     resultContainer.classList.remove('hidden');
                     herbInfo.classList.remove('hidden');
                     statusIndicator.innerHTML = '<i class="fa fa-check text-green-500 mr-1"></i><span>识别完成</span>';
@@ -286,7 +288,6 @@
                     console.error('识别失败:', error);
                     statusIndicator.innerHTML = '<i class="fa fa-exclamation-triangle text-yellow-500 mr-1"></i><span>识别失败，请重试</span>';
                 } finally {
-                    // 清理内存
                     tf.disposeVariables();
                     analyzeBtn.disabled = false;
                 }
