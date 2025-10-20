@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>中药识别 - 枸杞与菊花</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://cdn.jsdelivr.net.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.14.0/dist/tf.min.js"></script>
 </head>
 <body class="bg-gray-50 min-h-screen">
@@ -116,6 +116,8 @@
         let model;
         const labels = ['枸杞', '菊花'];
         let currentImage = null;
+        // 仓库基础地址（固定）
+        const repoBaseUrl = 'https://wuage505.github.io/shibie/';
         
         // 中药信息
         const herbData = {
@@ -155,41 +157,43 @@
             document.head.appendChild(script);
         }
         
-        // 加载模型（关键修改：解决跨域和路径问题）
+        // 加载模型（适配weights.bin权重文件）
         async function loadModel() {
             try {
                 statusIndicator.innerHTML = '<i class="fa fa-circle-o-notch fa-spin mr-1"></i><span>加载模型中...</span>';
                 
-                // 检查运行环境
-                if (window.location.protocol === 'file:') {
-                    throw new Error('请使用GitHub Pages访问（https://wuage505.github.io/shibie/）');
+                // 1. 检查运行环境（必须是GitHub Pages）
+                if (!window.location.href.startsWith(repoBaseUrl)) {
+                    throw new Error(`请访问正确地址：<a href="${repoBaseUrl}" target="_blank" class="text-blue-500 underline">${repoBaseUrl}</a>`);
                 }
                 
-                // 关键修复1：使用GitHub Pages相对路径（避免跨域）
-                // 你的仓库部署地址是：https://wuage505.github.io/shibie/
-                // 模型文件与index.html在同一目录，直接使用相对路径
-                const modelUrl = 'model.json';
+                // 2. 模型文件路径（适配weights.bin）
+                const modelUrl = `${repoBaseUrl}model.json?t=${new Date().getTime()}`; // 模型结构文件
+                const weightUrl = `${repoBaseUrl}weights.bin?t=${new Date().getTime()}`; // 权重文件（重点修改）
                 
-                // 关键修复2：添加缓存清除和跨域配置
-                const response = await fetch(modelUrl + '?t=' + new Date().getTime(), {
-                    mode: 'cors',
-                    cache: 'no-store'
+                // 3. 检查模型文件是否存在
+                const modelCheck = await fetch(modelUrl, { mode: 'cors', cache: 'no-store' });
+                if (!modelCheck.ok) {
+                    throw new Error(`模型配置文件缺失（404）<br>请确认仓库中存在：<code class="bg-gray-100 px-1 py-0.5 rounded">model.json</code>`);
+                }
+                
+                const weightCheck = await fetch(weightUrl, { mode: 'cors', cache: 'no-store' });
+                if (!weightCheck.ok) {
+                    throw new Error(`模型权重文件缺失（404）<br>请确认仓库中存在：<code class="bg-gray-100 px-1 py-0.5 rounded">weights.bin</code>`);
+                }
+                
+                // 4. 加载模型（指定权重文件路径）
+                model = await tf.loadLayersModel({
+                    modelTopology: await modelCheck.json(), // 加载模型结构
+                    weightManifestUrl: weightUrl // 加载weights.bin权重（重点修改）
                 });
                 
-                if (!response.ok) {
-                    throw new Error(`模型文件加载失败（${response.status}），可能文件未上传或路径错误`);
-                }
-                
-                // 关键修复3：使用正确的模型加载方式
-                model = await tf.loadLayersModel(tf.io.browserHTTPRequest(modelUrl, {
-                    requestInit: { mode: 'cors' }
-                }));
-                
-                // 验证模型
+                // 5. 验证模型
                 if (!model || typeof model.predict !== 'function') {
-                    throw new Error('模型结构不完整');
+                    throw new Error('模型结构不完整，可能文件损坏');
                 }
                 
+                // 加载成功
                 statusIndicator.innerHTML = '<i class="fa fa-check text-green-500 mr-1"></i><span>模型加载完成</span>';
                 analyzeBtn.disabled = false;
                 analyzeBtn.innerHTML = '<i class="fa fa-search mr-1"></i> 开始识别';
@@ -266,11 +270,11 @@
                     // 显示结果
                     resultImage.innerHTML = `<img src="${currentImage}" class="w-full h-full object-cover" alt="识别的药材">`;
                     predictionResult.innerHTML = `
-                        <div class="text-xl font-bold mb-1 ${confidence > 70 ? 'text-green-600' : 'text-orange-600'}">
+                        <div class="text-xl font-bold mb-1 ${置信度 > 70 ? 'text-green-600' : 'text-orange-600'}">
                             ${识别结果}
                         </div>
                         <div class="text-sm text-gray-500">
-                            可信度: ${confidence}%
+                            可信度: ${置信度}%
                         </div>
                     `;
                     
