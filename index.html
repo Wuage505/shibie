@@ -22,6 +22,11 @@
         </div>
     </header>
 
+    <!-- 新增模型加载进度条 -->
+    <div id="progress-container" class="hidden fixed top-16 left-0 right-0 bg-gray-100 h-1 z-40">
+        <div id="progress-bar" class="bg-green-500 h-full w-0 transition-all duration-300"></div>
+    </div>
+
     <main class="container mx-auto px-4 pt-20 pb-24">
         <!-- 库加载提示 -->
         <div class="bg-blue-50 border-l-4 border-blue-400 p-4 mb-6 text-sm">
@@ -30,7 +35,7 @@
                     <i class="fa fa-info-circle text-blue-400"></i>
                 </div>
                 <div class="ml-3">
-                    <p class="text-blue-700">请确保网络连接正常，以便加载识别所需的模型和库文件</p>
+                    <p class="text-blue-700">模型加载可能需要10-30秒，请耐心等待...</p>
                 </div>
             </div>
         </div>
@@ -99,6 +104,8 @@
     <script>
         // DOM元素
         const statusIndicator = document.getElementById('status-indicator');
+        const progressContainer = document.getElementById('progress-container');
+        const progressBar = document.getElementById('progress-bar');
         const imageUpload = document.getElementById('image-upload');
         const previewContainer = document.getElementById('preview-container');
         const previewImage = document.getElementById('preview-image');
@@ -117,6 +124,10 @@
         const labels = ['枸杞', '菊花'];
         let currentImage = null;
         
+        // 模型文件地址（已验证正确）
+        const modelUrl = 'https://wuage505.github.io/shibie/model.json';
+        const weightUrl = 'https://wuage505.github.io/shibie/weights.bin';
+        
         // 中药信息
         const herbData = {
             '枸杞': { 
@@ -127,27 +138,18 @@
             }
         };
         
-        // 模型文件绝对正确地址（已验证可访问）
-        const modelUrl = 'https://wuage505.github.io/shibie/model.json';
-        const weightUrl = 'https://wuage505.github.io/shibie/weights.bin';
-        
         // 初始化应用
         function initApp() {
-            // 检查TensorFlow是否加载
             if (typeof tf === 'undefined') {
                 statusIndicator.innerHTML = `
                     <i class="fa fa-exclamation-triangle text-red-500 mr-1"></i>
                     <span class="text-red-500">TensorFlow库加载失败，请检查网络</span>
                 `;
-                // 尝试重新加载
                 setTimeout(loadTFLibrary, 3000);
                 return;
             }
             
-            // 显示TensorFlow版本
             statusIndicator.innerHTML = `<i class="fa fa-info-circle text-blue-500 mr-1"></i><span>已加载TensorFlow.js v${tf.version.tfjs}</span>`;
-            
-            // 加载模型
             loadModel();
         }
         
@@ -159,31 +161,68 @@
             document.head.appendChild(script);
         }
         
-        // 加载模型（使用绝对正确地址）
+        // 加载模型（添加超时控制和进度反馈）
         async function loadModel() {
+            // 设置超时时间（30秒）
+            const TIMEOUT = 30000;
+            let timeoutId;
+            
             try {
                 statusIndicator.innerHTML = '<i class="fa fa-circle-o-notch fa-spin mr-1"></i><span>加载模型中...</span>';
+                progressContainer.classList.remove('hidden'); // 显示进度条
+                progressBar.style.width = '10%';
                 
-                // 检查模型文件是否可访问
-                const modelCheck = await fetch(modelUrl + '?t=' + new Date().getTime(), {
-                    mode: 'cors',
-                    cache: 'no-store'
+                // 超时控制
+                const timeoutPromise = new Promise((_, reject) => {
+                    timeoutId = setTimeout(() => {
+                        reject(new Error(`模型加载超时（超过${TIMEOUT/1000}秒），请检查网络或刷新页面`));
+                    }, TIMEOUT);
                 });
-                if (!modelCheck.ok) {
-                    throw new Error(`model.json 加载失败 (${modelCheck.status})`);
-                }
                 
-                const weightCheck = await fetch(weightUrl + '?t=' + new Date().getTime(), {
-                    mode: 'cors',
-                    cache: 'no-store'
-                });
-                if (!weightCheck.ok) {
-                    throw new Error(`weights.bin 加载失败 (${weightCheck.status})`);
+                // 加载model.json（50%进度）
+                const modelResponse = await Promise.race([
+                    fetch(modelUrl + '?t=' + new Date().getTime(), { 
+                        mode: 'cors', 
+                        cache: 'no-store' 
+                    }),
+                    timeoutPromise
+                ]);
+                progressBar.style.width = '30%';
+                
+                if (!modelResponse.ok) {
+                    throw new Error(`model.json 加载失败 (${modelResponse.status})`);
                 }
+                const modelJson = await modelResponse.json();
+                progressBar.style.width = '50%';
+                
+                // 加载weights.bin（大文件，显示进度）
+                const weightResponse = await Promise.race([
+                    fetch(weightUrl + '?t=' + new Date().getTime(), { 
+                        mode: 'cors', 
+                        cache: 'no-store' 
+                    }),
+                    timeoutPromise
+                ]);
+                
+                // 监听权重文件下载进度
+                weightResponse.body.pipeTo(new WritableStream({
+                    write(chunk) {
+                        // 估算进度（50%-90%）
+                        const loaded = weightResponse.headers.get('Content-Length') 
+                            ? (chunk.byteLength / parseInt(weightResponse.headers.get('Content-Length'))) * 40 + 50
+                            : Math.min(progressBar.style.width.replace('%', '') * 1 + 0.5, 90);
+                        progressBar.style.width = `${loaded}%`;
+                    }
+                }));
+                
+                if (!weightResponse.ok) {
+                    throw new Error(`weights.bin 加载失败 (${weightResponse.status})`);
+                }
+                progressBar.style.width = '90%';
                 
                 // 加载模型
                 model = await tf.loadLayersModel({
-                    modelTopology: await modelCheck.json(),
+                    modelTopology: modelJson,
                     weightManifestUrl: weightUrl
                 });
                 
@@ -192,16 +231,22 @@
                     throw new Error('模型结构不完整');
                 }
                 
+                // 加载完成
+                progressBar.style.width = '100%';
+                setTimeout(() => progressContainer.classList.add('hidden'), 500); // 隐藏进度条
                 statusIndicator.innerHTML = '<i class="fa fa-check text-green-500 mr-1"></i><span>模型加载完成</span>';
                 analyzeBtn.disabled = false;
                 analyzeBtn.innerHTML = '<i class="fa fa-search mr-1"></i> 开始识别';
                 
             } catch (error) {
                 console.error('模型加载失败:', error);
+                progressContainer.classList.add('hidden');
                 statusIndicator.innerHTML = `
                     <i class="fa fa-exclamation-triangle text-red-500 mr-1"></i>
                     <span class="text-red-500 text-xs">${error.message}</span>
                 `;
+            } finally {
+                clearTimeout(timeoutId); // 清除超时计时器
             }
         }
         
@@ -248,24 +293,20 @@
                 ctx.drawImage(img, 0, 0, 224, 224);
                 
                 try {
-                    // 预处理图像
                     let tensor = tf.browser.fromPixels(canvas)
                         .resizeBilinear([224, 224])
                         .toFloat()
                         .div(255.0)
                         .expandDims(0);
                     
-                    // 模型预测
                     const predictions = model.predict(tensor);
                     const scores = await predictions.data();
                     
-                    // 解析结果
                     const 枸杞概率 = (scores[0] * 100).toFixed(1);
                     const 菊花概率 = (scores[1] * 100).toFixed(1);
                     const 识别结果 = 枸杞概率 > 菊花概率 ? '枸杞' : '菊花';
                     const 置信度 = Math.max(枸杞概率, 菊花概率);
                     
-                    // 显示结果
                     resultImage.innerHTML = `<img src="${currentImage}" class="w-full h-full object-cover" alt="识别的药材">`;
                     predictionResult.innerHTML = `
                         <div class="text-xl font-bold mb-1 ${置信度 > 70 ? 'text-green-600' : 'text-orange-600'}">
