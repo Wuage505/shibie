@@ -11,15 +11,16 @@
     <style>
         body {
             background-color: #f5f5f5;
-            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         }
         .camera-container {
             position: relative;
             width: 100%;
-            padding-top: 133%; /* 4:3比例 */
+            padding-top: 133%; /* 4:3比例，适配手机屏幕 */
             overflow: hidden;
             border-radius: 16px;
             background-color: #000;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
         }
         #webcam {
             position: absolute;
@@ -44,6 +45,13 @@
             transform: translateY(0);
             opacity: 1;
         }
+        .loading-spinner {
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
     </style>
 </head>
 <body class="p-4 max-w-md mx-auto">
@@ -56,7 +64,7 @@
     </div>
 
     <!-- 相机区域 -->
-    <div class="camera-container mb-6 shadow-lg">
+    <div class="camera-container mb-6">
         <video id="webcam" autoplay muted playsinline></video>
         <!-- 相机未打开时的提示 -->
         <div id="camera-placeholder" class="absolute inset-0 flex flex-col items-center justify-center text-white">
@@ -101,15 +109,81 @@
 
     <!-- 状态提示 -->
     <div id="status" class="text-center text-gray-500 text-sm py-2">
-        <i class="fa fa-circle-o-notch fa-spin mr-1"></i> 加载模型中...
+        <i class="fa fa-circle-o-notch fa-spin mr-1 loading-spinner"></i> 加载模型中...
     </div>
 
     <script>
-        // 全局变量
-        let model;
-        let webcam;
-        const classNames = ['枸杞', '菊花']; // 与训练时的类别顺序必须一致
-        const MODEL_URL = 'model.json'; // 模型文件路径（与HTML同目录）
+        // 模型处理核心类（重点：修改模型路径为model文件夹下的model.json）
+        class HerbModelHandler {
+            // 模型路径改为 'model/model.json'（因为模型在model子文件夹中）
+            constructor(modelUrl = 'model/model.json', classNames = ['枸杞', '菊花']) {
+                this.modelUrl = modelUrl;
+                this.classNames = classNames;
+                this.model = null;
+                this.isLoaded = false;
+            }
+
+            // 加载模型
+            async loadModel() {
+                try {
+                    if (this.isLoaded) return true;
+                    this.model = await tf.loadLayersModel(this.modelUrl);
+                    this.isLoaded = true;
+                    console.log('模型加载成功');
+                    return true;
+                } catch (error) {
+                    console.error('模型加载失败：', error);
+                    this.isLoaded = false;
+                    return false;
+                }
+            }
+
+            // 图像预处理
+            preprocessImage(imgTensor) {
+                return tf.tidy(() => {
+                    return imgTensor.resizeBilinear([224, 224]) // 与训练时输入尺寸一致
+                        .toFloat()
+                        .div(255.0) // 归一化到0-1
+                        .expandDims(0); // 添加批次维度
+                });
+            }
+
+            // 执行推理
+            async predict(imgTensor) {
+                if (!this.isLoaded || !this.model) {
+                    console.error('模型未加载');
+                    return null;
+                }
+
+                try {
+                    const processedImg = this.preprocessImage(imgTensor);
+                    const predictions = await this.model.predict(processedImg).data();
+                    const scores = Array.from(predictions);
+
+                    const maxScore = Math.max(...scores);
+                    const predictedIndex = scores.indexOf(maxScore);
+                    
+                    const result = {
+                        predictedClass: this.classNames[predictedIndex],
+                        confidence: (maxScore * 100).toFixed(1),
+                        probabilities: {
+                            [this.classNames[0]]: (scores[0] * 100).toFixed(1),
+                            [this.classNames[1]]: (scores[1] * 100).toFixed(1)
+                        }
+                    };
+
+                    tf.dispose([imgTensor, processedImg]); // 清理内存
+                    return result;
+                } catch (error) {
+                    console.error('推理失败：', error);
+                    return null;
+                }
+            }
+        }
+
+        // 初始化模型（自动使用model/model.json路径）
+        const modelHandler = new HerbModelHandler();
+        let webcam; // 相机实例
 
         // DOM元素
         const startBtn = document.getElementById('start-btn');
@@ -124,25 +198,22 @@
         const chrysanthemumElement = document.getElementById('chrysanthemum');
         const statusElement = document.getElementById('status');
 
-        // 初始化：加载模型
-        async function init() {
-            try {
-                statusElement.textContent = '加载模型中...';
-                // 加载TensorFlow.js模型
-                model = await tf.loadLayersModel(MODEL_URL);
+        // 页面加载完成后初始化
+        window.onload = async () => {
+            const loadSuccess = await modelHandler.loadModel();
+            if (loadSuccess) {
                 statusElement.textContent = '模型加载完成，点击打开相机';
-                startBtn.disabled = false; // 模型加载成功后启用相机按钮
-            } catch (error) {
-                statusElement.innerHTML = `<span class="text-red-500"><i class="fa fa-exclamation-circle mr-1"></i>模型加载失败：请检查模型文件是否存在</span>`;
-                console.error('模型加载错误：', error);
+                startBtn.disabled = false;
+            } else {
+                statusElement.innerHTML = `<span class="text-red-500"><i class="fa fa-exclamation-circle mr-1"></i>模型加载失败：请检查model文件夹中的文件</span>`;
             }
-        }
+        };
 
         // 打开相机
-        async function startCamera() {
+        startBtn.addEventListener('click', async () => {
             try {
                 statusElement.textContent = '正在打开相机...';
-                // 请求相机权限（优先使用后置摄像头）
+                // 请求后置摄像头
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: { 
                         facingMode: { ideal: 'environment' },
@@ -151,85 +222,53 @@
                     }
                 });
 
-                // 显示相机画面，隐藏占位符
                 webcamElement.srcObject = stream;
                 cameraPlaceholder.classList.add('hidden');
                 webcam = await tf.data.webcam(webcamElement);
 
-                // 启用识别按钮
                 captureBtn.disabled = false;
                 statusElement.textContent = '请对准药材，点击识别按钮';
             } catch (error) {
                 statusElement.innerHTML = `<span class="text-red-500"><i class="fa fa-exclamation-circle mr-1"></i>相机打开失败：请允许相机权限</span>`;
                 console.error('相机错误：', error);
             }
-        }
+        });
 
-        // 拍照并识别
-        async function captureAndPredict() {
-            if (!model || !webcam) return;
+        // 拍照识别
+        captureBtn.addEventListener('click', async () => {
+            if (!webcam) return;
+
+            statusElement.textContent = '识别中...';
+            captureBtn.disabled = true;
 
             try {
-                statusElement.textContent = '识别中...';
-                captureBtn.disabled = true;
+                const img = await webcam.capture(); // 捕获图像
+                const result = await modelHandler.predict(img); // 模型推理
 
-                // 捕获相机图像
-                const img = await webcam.capture();
-
-                // 图像预处理（需与训练时的输入尺寸一致，默认224x224）
-                const processedImg = tf.tidy(() => {
-                    return img.resizeBilinear([224, 224])
-                        .toFloat()
-                        .div(255.0) // 归一化到0-1
-                        .expandDims(0); // 添加批次维度
-                });
-
-                // 模型预测
-                const predictions = await model.predict(processedImg).data();
-                const scores = Array.from(predictions);
-
-                // 解析结果
-                const maxScore = Math.max(...scores);
-                const predictedIndex = scores.indexOf(maxScore);
-                const predictedClass = classNames[predictedIndex];
-                const confidence = (maxScore * 100).toFixed(1);
-                const wolfberryProb = (scores[0] * 100).toFixed(1);
-                const chrysanthemumProb = (scores[1] * 100).toFixed(1);
-
-                // 显示结果
-                predictionElement.textContent = predictedClass;
-                confidenceElement.textContent = `可信度：${confidence}%`;
-                wolfberryElement.textContent = `${wolfberryProb}%`;
-                chrysanthemumElement.textContent = `${chrysanthemumProb}%`;
-                resultCard.classList.add('show');
-
-                statusElement.textContent = '识别完成';
-
-                // 释放内存
-                img.dispose();
-                processedImg.dispose();
-
+                if (result) {
+                    // 显示结果
+                    predictionElement.textContent = result.predictedClass;
+                    confidenceElement.textContent = `可信度：${result.confidence}%`;
+                    wolfberryElement.textContent = `${result.probabilities.枸杞}%`;
+                    chrysanthemumElement.textContent = `${result.probabilities.菊花}%`;
+                    resultCard.classList.add('show');
+                    statusElement.textContent = '识别完成';
+                } else {
+                    statusElement.innerHTML = `<span class="text-red-500"><i class="fa fa-exclamation-circle mr-1"></i>识别失败，请重试</span>`;
+                    captureBtn.disabled = false;
+                }
             } catch (error) {
-                statusElement.innerHTML = `<span class="text-red-500"><i class="fa fa-exclamation-circle mr-1"></i>识别失败：${error.message}</span>`;
-                console.error('识别错误：', error);
+                statusElement.innerHTML = `<span class="text-red-500"><i class="fa fa-exclamation-circle mr-1"></i>操作失败：${error.message}</span>`;
                 captureBtn.disabled = false;
             }
-        }
+        });
 
-        // 重置（重新拍照）
-        function reset() {
+        // 重新识别
+        resetBtn.addEventListener('click', () => {
             resultCard.classList.remove('show');
             captureBtn.disabled = false;
             statusElement.textContent = '请对准药材，点击识别按钮';
-        }
-
-        // 绑定事件
-        startBtn.addEventListener('click', startCamera);
-        captureBtn.addEventListener('click', captureAndPredict);
-        resetBtn.addEventListener('click', reset);
-
-        // 页面加载完成后初始化
-        window.onload = init;
+        });
     </script>
 </body>
 </html>
