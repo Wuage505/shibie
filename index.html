@@ -2,82 +2,121 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>中药识别 - 枸杞/菊花</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
-    <!-- 引入 TensorFlow.js -->
+    <!-- 引入TensorFlow.js库 -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.14.0/dist/tf.min.js"></script>
     <style>
         body {
-            touch-action: manipulation; /* 防止手机双击缩放 */
+            background-color: #f5f5f5;
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+        .camera-container {
+            position: relative;
+            width: 100%;
+            padding-top: 133%; /* 4:3比例 */
+            overflow: hidden;
+            border-radius: 16px;
+            background-color: #000;
         }
         #webcam {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
             object-fit: cover;
+        }
+        .btn {
+            transition: all 0.2s ease;
+        }
+        .btn:active {
+            transform: scale(0.95);
+        }
+        .result-card {
+            transform: translateY(20px);
+            opacity: 0;
+            transition: all 0.3s ease;
+        }
+        .result-card.show {
+            transform: translateY(0);
+            opacity: 1;
         }
     </style>
 </head>
-<body class="bg-gray-100 min-h-screen">
-    <div class="container mx-auto px-4 py-6 max-w-md">
-        <h1 class="text-2xl font-bold text-center mb-6 text-green-700">
+<body class="p-4 max-w-md mx-auto">
+    <!-- 标题区域 -->
+    <div class="text-center mb-6">
+        <h1 class="text-[clamp(1.5rem,5vw,2rem)] font-bold text-green-700">
             <i class="fa fa-leaf mr-2"></i>中药识别
         </h1>
+        <p class="text-gray-500 text-sm">拍照识别枸杞或菊花</p>
+    </div>
 
-        <!-- 相机/预览区域 -->
-        <div class="bg-white rounded-xl shadow-md overflow-hidden mb-6">
-            <video id="webcam" class="w-full h-64 bg-gray-200" autoplay muted playsinline></video>
-            <canvas id="canvas" class="hidden w-full h-64"></canvas>
-            <img id="captured-img" class="hidden w-full h-64 object-cover" alt="拍摄的图片">
+    <!-- 相机区域 -->
+    <div class="camera-container mb-6 shadow-lg">
+        <video id="webcam" autoplay muted playsinline></video>
+        <!-- 相机未打开时的提示 -->
+        <div id="camera-placeholder" class="absolute inset-0 flex flex-col items-center justify-center text-white">
+            <i class="fa fa-camera text-5xl mb-3 opacity-70"></i>
+            <p class="text-sm opacity-70">点击下方按钮打开相机</p>
         </div>
+    </div>
 
-        <!-- 控制按钮 -->
-        <div class="flex justify-center gap-4 mb-6">
-            <button id="start-cam" class="bg-blue-500 hover:bg-blue-600 text-white px-5 py-3 rounded-full flex items-center shadow-md">
-                <i class="fa fa-video-camera mr-2"></i> 打开相机
-            </button>
-            <button id="capture-btn" class="bg-green-500 hover:bg-green-600 text-white px-5 py-3 rounded-full flex items-center shadow-md" disabled>
-                <i class="fa fa-camera mr-2"></i> 拍照识别
-            </button>
+    <!-- 控制按钮 -->
+    <div class="flex justify-center gap-4 mb-8">
+        <button id="start-btn" class="btn bg-blue-500 hover:bg-blue-600 text-white px-6 py-3 rounded-full flex items-center shadow-md">
+            <i class="fa fa-video-camera mr-2"></i> 打开相机
+        </button>
+        <button id="capture-btn" class="btn bg-green-500 hover:bg-green-600 text-white px-6 py-3 rounded-full flex items-center shadow-md" disabled>
+            <i class="fa fa-camera mr-2"></i> 识别
+        </button>
+    </div>
+
+    <!-- 结果展示区域 -->
+    <div id="result-card" class="result-card bg-white rounded-xl shadow-md p-5 mb-6">
+        <h2 class="text-xl font-semibold text-center mb-4">识别结果</h2>
+        <div class="text-center mb-4">
+            <p id="prediction" class="text-[clamp(1.5rem,5vw,2rem)] font-bold text-purple-600">--</p>
+            <p id="confidence" class="text-gray-500">可信度：--%</p>
         </div>
-
-        <!-- 结果显示 -->
-        <div id="result-card" class="bg-white rounded-xl shadow-md p-5 mb-6 hidden">
-            <h2 class="text-xl font-semibold text-center mb-4">识别结果</h2>
-            <div class="text-center">
-                <p id="prediction" class="text-2xl font-bold text-purple-600"></p>
-                <p id="confidence" class="text-gray-500 mt-2">可信度：--%</p>
-                <div class="grid grid-cols-2 gap-3 mt-4">
-                    <div class="bg-gray-50 p-3 rounded-lg">
-                        <p class="text-sm text-gray-500">枸杞概率</p>
-                        <p id="wolfberry" class="font-bold text-red-500">--%</p>
-                    </div>
-                    <div class="bg-gray-50 p-3 rounded-lg">
-                        <p class="text-sm text-gray-500">菊花概率</p>
-                        <p id="chrysanthemum" class="font-bold text-yellow-500">--%</p>
-                    </div>
-                </div>
+        <!-- 概率分布 -->
+        <div class="grid grid-cols-2 gap-3">
+            <div class="bg-gray-50 p-3 rounded-lg">
+                <p class="text-sm text-gray-500">枸杞</p>
+                <p id="wolfberry" class="font-bold text-red-500">--%</p>
+            </div>
+            <div class="bg-gray-50 p-3 rounded-lg">
+                <p class="text-sm text-gray-500">菊花</p>
+                <p id="chrysanthemum" class="font-bold text-yellow-500">--%</p>
             </div>
         </div>
+        <!-- 重新识别按钮 -->
+        <button id="reset-btn" class="mt-4 w-full bg-gray-100 hover:bg-gray-200 text-gray-700 py-2 rounded-lg">
+            重新识别
+        </button>
+    </div>
 
-        <!-- 状态提示 -->
-        <div id="status" class="text-center text-gray-500 py-2">
-            <i class="fa fa-circle-o-notch fa-spin mr-1"></i> 加载模型中...
-        </div>
+    <!-- 状态提示 -->
+    <div id="status" class="text-center text-gray-500 text-sm py-2">
+        <i class="fa fa-circle-o-notch fa-spin mr-1"></i> 加载模型中...
     </div>
 
     <script>
         // 全局变量
         let model;
         let webcam;
-        const classNames = ['枸杞', '菊花']; // 与训练时的类别顺序一致
+        const classNames = ['枸杞', '菊花']; // 与训练时的类别顺序必须一致
         const MODEL_URL = 'model.json'; // 模型文件路径（与HTML同目录）
 
         // DOM元素
-        const startCamBtn = document.getElementById('start-cam');
+        const startBtn = document.getElementById('start-btn');
         const captureBtn = document.getElementById('capture-btn');
+        const resetBtn = document.getElementById('reset-btn');
         const webcamElement = document.getElementById('webcam');
-        const canvasElement = document.getElementById('canvas');
-        const capturedImg = document.getElementById('captured-img');
+        const cameraPlaceholder = document.getElementById('camera-placeholder');
         const resultCard = document.getElementById('result-card');
         const predictionElement = document.getElementById('prediction');
         const confidenceElement = document.getElementById('confidence');
@@ -88,34 +127,38 @@
         // 初始化：加载模型
         async function init() {
             try {
-                // 加载TensorFlow.js模型
                 statusElement.textContent = '加载模型中...';
+                // 加载TensorFlow.js模型
                 model = await tf.loadLayersModel(MODEL_URL);
                 statusElement.textContent = '模型加载完成，点击打开相机';
-                
-                // 模型加载成功后启用相机按钮
-                startCamBtn.disabled = false;
+                startBtn.disabled = false; // 模型加载成功后启用相机按钮
             } catch (error) {
-                statusElement.innerHTML = `<span class="text-red-500"><i class="fa fa-exclamation-circle mr-1"></i>模型加载失败：${error.message}</span>`;
+                statusElement.innerHTML = `<span class="text-red-500"><i class="fa fa-exclamation-circle mr-1"></i>模型加载失败：请检查模型文件是否存在</span>`;
                 console.error('模型加载错误：', error);
             }
         }
 
         // 打开相机
-        async function startWebcam() {
+        async function startCamera() {
             try {
                 statusElement.textContent = '正在打开相机...';
-                // 请求相机权限
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { facingMode: 'environment' } // 优先使用后置摄像头
+                // 请求相机权限（优先使用后置摄像头）
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { 
+                        facingMode: { ideal: 'environment' },
+                        width: { ideal: 480 },
+                        height: { ideal: 640 }
+                    }
                 });
-                
+
+                // 显示相机画面，隐藏占位符
                 webcamElement.srcObject = stream;
+                cameraPlaceholder.classList.add('hidden');
                 webcam = await tf.data.webcam(webcamElement);
-                
-                // 相机打开后启用拍照按钮
+
+                // 启用识别按钮
                 captureBtn.disabled = false;
-                statusElement.textContent = '相机已就绪，点击拍照识别';
+                statusElement.textContent = '请对准药材，点击识别按钮';
             } catch (error) {
                 statusElement.innerHTML = `<span class="text-red-500"><i class="fa fa-exclamation-circle mr-1"></i>相机打开失败：请允许相机权限</span>`;
                 console.error('相机错误：', error);
@@ -130,18 +173,12 @@
                 statusElement.textContent = '识别中...';
                 captureBtn.disabled = true;
 
-                // 从相机捕获一帧图像
+                // 捕获相机图像
                 const img = await webcam.capture();
-                
-                // 显示拍摄的图片
-                canvasElement.getContext('2d').drawImage(webcamElement, 0, 0, canvasElement.width, canvasElement.height);
-                capturedImg.src = canvasElement.toDataURL('image/jpeg');
-                capturedImg.classList.remove('hidden');
-                webcamElement.classList.add('hidden');
 
-                // 图像预处理（与训练时保持一致）
+                // 图像预处理（需与训练时的输入尺寸一致，默认224x224）
                 const processedImg = tf.tidy(() => {
-                    return img.resizeBilinear([224, 224]) // 调整为模型输入尺寸（需与训练时一致）
+                    return img.resizeBilinear([224, 224])
                         .toFloat()
                         .div(255.0) // 归一化到0-1
                         .expandDims(0); // 添加批次维度
@@ -164,24 +201,32 @@
                 confidenceElement.textContent = `可信度：${confidence}%`;
                 wolfberryElement.textContent = `${wolfberryProb}%`;
                 chrysanthemumElement.textContent = `${chrysanthemumProb}%`;
-                resultCard.classList.remove('hidden');
+                resultCard.classList.add('show');
+
                 statusElement.textContent = '识别完成';
 
-                // 清理内存
+                // 释放内存
                 img.dispose();
                 processedImg.dispose();
 
             } catch (error) {
                 statusElement.innerHTML = `<span class="text-red-500"><i class="fa fa-exclamation-circle mr-1"></i>识别失败：${error.message}</span>`;
                 console.error('识别错误：', error);
-            } finally {
                 captureBtn.disabled = false;
             }
         }
 
-        // 事件监听
-        startCamBtn.addEventListener('click', startWebcam);
+        // 重置（重新拍照）
+        function reset() {
+            resultCard.classList.remove('show');
+            captureBtn.disabled = false;
+            statusElement.textContent = '请对准药材，点击识别按钮';
+        }
+
+        // 绑定事件
+        startBtn.addEventListener('click', startCamera);
         captureBtn.addEventListener('click', captureAndPredict);
+        resetBtn.addEventListener('click', reset);
 
         // 页面加载完成后初始化
         window.onload = init;
