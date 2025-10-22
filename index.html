@@ -13,22 +13,25 @@
             background-color: #f5f5f5;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         }
-        .camera-container {
+        .media-container {
             position: relative;
             width: 100%;
-            padding-top: 133%; /* 4:3比例，适配手机屏幕 */
+            padding-top: 133%; /* 4:3比例 */
             overflow: hidden;
             border-radius: 16px;
             background-color: #000;
             box-shadow: 0 4px 12px rgba(0,0,0,0.1);
         }
-        #webcam {
+        #webcam, #uploaded-image {
             position: absolute;
             top: 0;
             left: 0;
             width: 100%;
             height: 100%;
             object-fit: cover;
+        }
+        #uploaded-image {
+            display: none; /* 默认隐藏上传的图片 */
         }
         .btn {
             transition: all 0.2s ease;
@@ -52,6 +55,10 @@
             from { transform: rotate(0deg); }
             to { transform: rotate(360deg); }
         }
+        /* 隐藏文件输入框的默认样式 */
+        #image-upload {
+            display: none;
+        }
     </style>
 </head>
 <body class="p-4 max-w-md mx-auto">
@@ -60,26 +67,31 @@
         <h1 class="text-[clamp(1.5rem,5vw,2rem)] font-bold text-green-700">
             <i class="fa fa-leaf mr-2"></i>中药识别
         </h1>
-        <p class="text-gray-500 text-sm">拍照识别枸杞或菊花</p>
+        <p class="text-gray-500 text-sm">支持拍照或上传图片识别枸杞/菊花</p>
     </div>
 
-    <!-- 相机区域 -->
-    <div class="camera-container mb-6">
-        <video id="webcam" autoplay muted playsinline></video>
-        <!-- 相机未打开时的提示 -->
-        <div id="camera-placeholder" class="absolute inset-0 flex flex-col items-center justify-center text-white">
+    <!-- 媒体展示区域（相机/上传图片） -->
+    <div class="media-container mb-6">
+        <video id="webcam" autoplay muted playsinline style="display: none;"></video>
+        <img id="uploaded-image" alt="上传的图片">
+        <!-- 初始提示 -->
+        <div id="media-placeholder" class="absolute inset-0 flex flex-col items-center justify-center text-white">
             <i class="fa fa-camera text-5xl mb-3 opacity-70"></i>
-            <p class="text-sm opacity-70">点击下方按钮打开相机</p>
+            <p class="text-sm opacity-70">点击下方按钮选择识别方式</p>
         </div>
     </div>
 
     <!-- 控制按钮 -->
-    <div class="flex justify-center gap-4 mb-8">
-        <button id="start-btn" class="btn bg-blue-500 hover:bg-blue-600 text-white px-6 py-3 rounded-full flex items-center shadow-md">
-            <i class="fa fa-video-camera mr-2"></i> 打开相机
+    <div class="flex flex-wrap justify-center gap-3 mb-6">
+        <button id="start-cam-btn" class="btn bg-blue-500 hover:bg-blue-600 text-white px-5 py-3 rounded-full flex items-center shadow-md">
+            <i class="fa fa-video-camera mr-2"></i> 相机识别
         </button>
-        <button id="capture-btn" class="btn bg-green-500 hover:bg-green-600 text-white px-6 py-3 rounded-full flex items-center shadow-md" disabled>
-            <i class="fa fa-camera mr-2"></i> 识别
+        <label for="image-upload" class="btn bg-purple-500 hover:bg-purple-600 text-white px-5 py-3 rounded-full flex items-center shadow-md cursor-pointer">
+            <i class="fa fa-upload mr-2"></i> 上传图片
+        </label>
+        <input type="file" id="image-upload" accept="image/*">
+        <button id="identify-btn" class="btn bg-green-500 hover:bg-green-600 text-white px-5 py-3 rounded-full flex items-center shadow-md" disabled>
+            <i class="fa fa-search mr-2"></i> 开始识别
         </button>
     </div>
 
@@ -113,9 +125,8 @@
     </div>
 
     <script>
-        // 模型处理核心类（重点：修改模型路径为model文件夹下的model.json）
+        // 模型处理核心类
         class HerbModelHandler {
-            // 模型路径改为 'model/model.json'（因为模型在model子文件夹中）
             constructor(modelUrl = 'model/model.json', classNames = ['枸杞', '菊花']) {
                 this.modelUrl = modelUrl;
                 this.classNames = classNames;
@@ -181,16 +192,19 @@
             }
         }
 
-        // 初始化模型（自动使用model/model.json路径）
+        // 全局变量
         const modelHandler = new HerbModelHandler();
-        let webcam; // 相机实例
+        let webcam = null;
+        let currentMode = null; // 'camera' 或 'upload'
 
         // DOM元素
-        const startBtn = document.getElementById('start-btn');
-        const captureBtn = document.getElementById('capture-btn');
+        const startCamBtn = document.getElementById('start-cam-btn');
+        const imageUpload = document.getElementById('image-upload');
+        const identifyBtn = document.getElementById('identify-btn');
         const resetBtn = document.getElementById('reset-btn');
         const webcamElement = document.getElementById('webcam');
-        const cameraPlaceholder = document.getElementById('camera-placeholder');
+        const uploadedImage = document.getElementById('uploaded-image');
+        const mediaPlaceholder = document.getElementById('media-placeholder');
         const resultCard = document.getElementById('result-card');
         const predictionElement = document.getElementById('prediction');
         const confidenceElement = document.getElementById('confidence');
@@ -198,21 +212,29 @@
         const chrysanthemumElement = document.getElementById('chrysanthemum');
         const statusElement = document.getElementById('status');
 
-        // 页面加载完成后初始化
+        // 页面加载完成后初始化模型
         window.onload = async () => {
             const loadSuccess = await modelHandler.loadModel();
             if (loadSuccess) {
-                statusElement.textContent = '模型加载完成，点击打开相机';
-                startBtn.disabled = false;
+                statusElement.textContent = '模型加载完成，请选择识别方式';
+                startCamBtn.disabled = false;
+                imageUpload.disabled = false;
             } else {
-                statusElement.innerHTML = `<span class="text-red-500"><i class="fa fa-exclamation-circle mr-1"></i>模型加载失败：请检查model文件夹中的文件</span>`;
+                statusElement.innerHTML = `<span class="text-red-500"><i class="fa fa-exclamation-circle mr-1"></i>模型加载失败：请检查model文件夹</span>`;
             }
         };
 
-        // 打开相机
-        startBtn.addEventListener('click', async () => {
+        // 相机识别模式
+        startCamBtn.addEventListener('click', async () => {
             try {
                 statusElement.textContent = '正在打开相机...';
+                currentMode = 'camera';
+                
+                // 隐藏其他元素，显示相机
+                uploadedImage.style.display = 'none';
+                mediaPlaceholder.classList.add('hidden');
+                webcamElement.style.display = 'block';
+
                 // 请求后置摄像头
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: { 
@@ -223,27 +245,65 @@
                 });
 
                 webcamElement.srcObject = stream;
-                cameraPlaceholder.classList.add('hidden');
                 webcam = await tf.data.webcam(webcamElement);
-
-                captureBtn.disabled = false;
-                statusElement.textContent = '请对准药材，点击识别按钮';
+                
+                // 启用识别按钮
+                identifyBtn.disabled = false;
+                statusElement.textContent = '请对准药材，点击开始识别';
             } catch (error) {
-                statusElement.innerHTML = `<span class="text-red-500"><i class="fa fa-exclamation-circle mr-1"></i>相机打开失败：请允许相机权限</span>`;
+                statusElement.innerHTML = `<span class="text-red-500"><i class="fa fa-exclamation-circle mr-1"></i>相机打开失败：请允许权限</span>`;
                 console.error('相机错误：', error);
             }
         });
 
-        // 拍照识别
-        captureBtn.addEventListener('click', async () => {
-            if (!webcam) return;
+        // 上传图片识别模式
+        imageUpload.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            currentMode = 'upload';
+            // 隐藏其他元素，显示上传的图片
+            webcamElement.style.display = 'none';
+            mediaPlaceholder.classList.add('hidden');
+            uploadedImage.style.display = 'block';
+
+            // 预览上传的图片
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                uploadedImage.src = event.target.result;
+                // 图片加载完成后启用识别按钮
+                uploadedImage.onload = () => {
+                    identifyBtn.disabled = false;
+                    statusElement.textContent = '图片已上传，点击开始识别';
+                };
+            };
+            reader.readAsDataURL(file);
+        });
+
+        // 开始识别
+        identifyBtn.addEventListener('click', async () => {
+            if (!modelHandler.isLoaded) return;
 
             statusElement.textContent = '识别中...';
-            captureBtn.disabled = true;
+            identifyBtn.disabled = true;
 
             try {
-                const img = await webcam.capture(); // 捕获图像
-                const result = await modelHandler.predict(img); // 模型推理
+                let imgTensor;
+
+                // 根据当前模式获取图像张量
+                if (currentMode === 'camera' && webcam) {
+                    // 从相机捕获图像
+                    const img = await webcam.capture();
+                    imgTensor = img;
+                } else if (currentMode === 'upload' && uploadedImage.src) {
+                    // 从上传的图片创建张量
+                    imgTensor = tf.browser.fromPixels(uploadedImage);
+                } else {
+                    throw new Error('未获取到图像，请重试');
+                }
+
+                // 模型推理
+                const result = await modelHandler.predict(imgTensor);
 
                 if (result) {
                     // 显示结果
@@ -254,20 +314,33 @@
                     resultCard.classList.add('show');
                     statusElement.textContent = '识别完成';
                 } else {
-                    statusElement.innerHTML = `<span class="text-red-500"><i class="fa fa-exclamation-circle mr-1"></i>识别失败，请重试</span>`;
-                    captureBtn.disabled = false;
+                    throw new Error('无法获取识别结果');
                 }
             } catch (error) {
-                statusElement.innerHTML = `<span class="text-red-500"><i class="fa fa-exclamation-circle mr-1"></i>操作失败：${error.message}</span>`;
-                captureBtn.disabled = false;
+                statusElement.innerHTML = `<span class="text-red-500"><i class="fa fa-exclamation-circle mr-1"></i>识别失败：${error.message}</span>`;
+                identifyBtn.disabled = false;
             }
         });
 
-        // 重新识别
+        // 重新识别（重置状态）
         resetBtn.addEventListener('click', () => {
+            // 隐藏结果卡片
             resultCard.classList.remove('show');
-            captureBtn.disabled = false;
-            statusElement.textContent = '请对准药材，点击识别按钮';
+            // 重置媒体区域
+            webcamElement.style.display = 'none';
+            uploadedImage.style.display = 'none';
+            mediaPlaceholder.classList.remove('hidden');
+            // 停止相机流（如果在相机模式）
+            if (currentMode === 'camera' && webcamElement.srcObject) {
+                webcamElement.srcObject.getTracks().forEach(track => track.stop());
+                webcam = null;
+            }
+            // 重置文件输入
+            imageUpload.value = '';
+            // 重置状态
+            currentMode = null;
+            identifyBtn.disabled = true;
+            statusElement.textContent = '请选择识别方式（相机/上传图片）';
         });
     </script>
 </body>
